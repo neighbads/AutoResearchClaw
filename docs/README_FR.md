@@ -2,7 +2,7 @@
   <img src="../image/logo.png" width="800" alt="AutoResearchClaw Logo">
 </p>
 
-<h2 align="center"><b>Discutez une idée. Obtenez un article. Entièrement autonome.</b></h2>
+<h2 align="center"><b>Discutez une idée. Obtenez un article. Entièrement autonome & auto-évolutif.</b></h2>
 
 
 

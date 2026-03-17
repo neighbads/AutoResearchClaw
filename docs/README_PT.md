@@ -2,7 +2,7 @@
   <img src="../image/logo.png" width="800" alt="AutoResearchClaw Logo">
 </p>
 
-<h2 align="center"><b>Converse uma ideia. Receba um artigo. Totalmente autônomo.</b></h2>
+<h2 align="center"><b>Converse uma ideia. Receba um artigo. Totalmente autônomo & autoevolutivo.</b></h2>
 
 
 

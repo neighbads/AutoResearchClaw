@@ -2,7 +2,7 @@
   <img src="../image/logo.png" width="800" alt="AutoResearchClaw Logo">
 </p>
 
-<h2 align="center"><b>아이디어를 말하다. 논문을 받다. 완전 자동.</b></h2>
+<h2 align="center"><b>아이디어를 말하다. 논문을 받다. 완전 자동 & 자기 진화.</b></h2>
 
 
 

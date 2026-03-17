@@ -2,7 +2,7 @@
   <img src="../image/logo.png" width="800" alt="AutoResearchClaw Logo">
 </p>
 
-<h2 align="center"><b>アイデアを話す。論文を手に入れる。完全自動。</b></h2>
+<h2 align="center"><b>アイデアを話す。論文を手に入れる。完全自動 & 自己進化。</b></h2>
 
 
 

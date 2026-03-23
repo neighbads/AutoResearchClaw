@@ -152,6 +152,24 @@ def _generate_run_id(topic: str) -> str:
     return f"rc-{ts}-{topic_hash}"
 
 
+def _validate_seed_ingest_inputs(config: RCConfig) -> str | None:
+    seed_spec = (config.research.seed_spec_path or "").strip()
+    seed_repo = (config.research.seed_repo_path or "").strip()
+    if not seed_spec or not seed_repo:
+        return (
+            "Stage SEED_SPEC_INGEST requires research.seed_spec_path and "
+            "research.seed_repo_path"
+        )
+
+    seed_spec_path = Path(seed_spec).expanduser()
+    seed_repo_path = Path(seed_repo).expanduser()
+    if not seed_spec_path.is_file():
+        return f"Stage SEED_SPEC_INGEST requires readable seed spec file: {seed_spec_path}"
+    if not seed_repo_path.is_dir():
+        return f"Stage SEED_SPEC_INGEST requires readable seed repo directory: {seed_repo_path}"
+    return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     resolved = _resolve_config_or_exit(args)
     if resolved is None:
@@ -193,19 +211,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         new_research = dataclasses.replace(config.research, topic=topic)
         config = dataclasses.replace(config, research=new_research)
-
-    # --- LLM Preflight ---
-    if not skip_preflight:
-        from researchclaw.llm import create_llm_client
-
-        client = create_llm_client(config)
-        print("Preflight check...", end=" ", flush=True)
-        ok, msg = client.preflight()
-        if ok:
-            print(msg)
-        else:
-            print(f"FAILED — {msg}", file=sys.stderr)
-            return 1
 
     run_id = _generate_run_id(config.research.topic)
     run_dir = Path(output or f"artifacts/{run_id}")
@@ -250,7 +255,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from researchclaw.pipeline.stages import Stage
 
     # --- Determine start stage ---
-    from_stage = Stage.TOPIC_INIT
+    from_stage = Stage.SEED_SPEC_INGEST
     if from_stage_name:
         try:
             from_stage = Stage[from_stage_name.upper()]
@@ -267,6 +272,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         if resumed is not None:
             from_stage = resumed
             print(f"Resuming from checkpoint: Stage {int(from_stage)}: {from_stage.name}")
+
+    if from_stage is Stage.SEED_SPEC_INGEST:
+        seed_error = _validate_seed_ingest_inputs(config)
+        if seed_error is not None:
+            print(f"Error: {seed_error}", file=sys.stderr)
+            return 1
+
+    # --- LLM Preflight ---
+    if not skip_preflight:
+        from researchclaw.llm import create_llm_client
+
+        client = create_llm_client(config)
+        print("Preflight check...", end=" ", flush=True)
+        ok, msg = client.preflight()
+        if ok:
+            print(msg)
+        else:
+            print(f"FAILED — {msg}", file=sys.stderr)
+            return 1
 
     from researchclaw import __version__
     print(f"ResearchClaw v{__version__} — Starting pipeline")

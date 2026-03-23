@@ -1,4 +1,4 @@
-"""23-stage ResearchClaw pipeline state machine.
+"""24-stage ResearchClaw pipeline state machine.
 
 Defines the stage sequence, status transitions, gate logic, and rollback rules.
 Migrated from arc/state_machine.py (19 stages) with the following changes:
@@ -20,7 +20,10 @@ from typing import Iterable
 
 
 class Stage(IntEnum):
-    """23-stage research pipeline."""
+    """24-stage research pipeline."""
+
+    # Phase 0: Seed Ingest
+    SEED_SPEC_INGEST = 0
 
     # Phase A: Research Scoping
     TOPIC_INIT = 1
@@ -149,6 +152,7 @@ NONCRITICAL_STAGES: frozenset[Stage] = frozenset(
 # ---------------------------------------------------------------------------
 
 PHASE_MAP: dict[str, tuple[Stage, ...]] = {
+    "0: Seed Ingest": (Stage.SEED_SPEC_INGEST,),
     "A: Research Scoping": (Stage.TOPIC_INIT, Stage.PROBLEM_DECOMPOSE),
     "B: Literature Discovery": (
         Stage.SEARCH_STRATEGY,
@@ -224,7 +228,13 @@ def gate_required(
 
 def default_rollback_stage(stage: Stage) -> Stage:
     """Return the configured rollback target, or the previous stage."""
-    return GATE_ROLLBACK.get(stage) or PREVIOUS_STAGE.get(stage) or stage
+    rollback = GATE_ROLLBACK.get(stage)
+    if rollback is not None:
+        return rollback
+    previous = PREVIOUS_STAGE.get(stage)
+    if previous is not None:
+        return previous
+    return stage
 
 
 def advance(
@@ -240,7 +250,11 @@ def advance(
     Raises ValueError on unsupported transitions.
     """
     event = TransitionEvent(event)
-    target_rollback = rollback_stage or default_rollback_stage(stage)
+    target_rollback = (
+        rollback_stage
+        if rollback_stage is not None
+        else default_rollback_stage(stage)
+    )
 
     # START → RUNNING
     if event is TransitionEvent.START and status in {

@@ -6,8 +6,8 @@ from researchclaw.pipeline.contracts import CONTRACTS, StageContract
 from researchclaw.pipeline.stages import GATE_STAGES, STAGE_SEQUENCE, Stage
 
 
-def test_contracts_dict_has_exactly_23_entries():
-    assert len(CONTRACTS) == 23
+def test_contracts_dict_has_exactly_24_entries():
+    assert len(CONTRACTS) == 24
 
 
 def test_every_stage_has_matching_contract_entry():
@@ -97,3 +97,43 @@ def test_contracts_follow_stage_sequence_order():
 @pytest.mark.parametrize("stage", STAGE_SEQUENCE)
 def test_contract_stage_int_matches_stage_enum_value(stage: Stage):
     assert int(CONTRACTS[stage].stage) == int(stage)
+
+
+def test_seed_spec_ingest_contract_outputs():
+    contract = CONTRACTS[Stage.SEED_SPEC_INGEST]
+
+    assert contract.input_files == ()
+    assert contract.output_files == (
+        "seed_manifest.json",
+        "seed_spec_outline.md",
+        "seed_claims.json",
+        "seed_open_questions.md",
+        "seed_repo_inventory.json",
+        "seed_repo_keyfiles.md",
+        "seed_api_map.json",
+        "seed_spec_code_alignment.md",
+    )
+    assert contract.error_code == "E00_SEED_INGEST_FAIL"
+
+
+def test_topic_init_consumes_seed_artifacts():
+    contract = CONTRACTS[Stage.TOPIC_INIT]
+
+    assert contract.input_files == ()
+
+
+def test_problem_decompose_consumes_seed_artifacts():
+    contract = CONTRACTS[Stage.PROBLEM_DECOMPOSE]
+
+    assert contract.input_files == ("goal.md",)
+
+
+def test_experiment_design_consumes_seed_artifacts():
+    contract = CONTRACTS[Stage.EXPERIMENT_DESIGN]
+
+    assert contract.input_files == (
+        "hypotheses.md",
+        "seed_spec_code_alignment.md",
+        "seed_repo_inventory.json",
+        "seed_api_map.json",
+    )

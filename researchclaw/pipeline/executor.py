@@ -89,6 +89,13 @@ from researchclaw.pipeline._helpers import (  # noqa: E402
 )
 
 # ---------------------------------------------------------------------------
+# Stage 0 (extracted to stage_impls/_seed_ingest.py)
+# ---------------------------------------------------------------------------
+from researchclaw.pipeline.stage_impls._seed_ingest import (  # noqa: E402
+    _execute_seed_spec_ingest,
+)
+
+# ---------------------------------------------------------------------------
 # Stages 1-2 (extracted to stage_impls/_topic.py)
 # ---------------------------------------------------------------------------
 from researchclaw.pipeline.stage_impls._topic import (  # noqa: E402
@@ -182,6 +189,7 @@ from researchclaw.pipeline.stage_impls._review_publish import (  # noqa: E402
 
 
 _STAGE_EXECUTORS: dict[Stage, Callable[..., StageResult]] = {
+    Stage.SEED_SPEC_INGEST: _execute_seed_spec_ingest,
     Stage.TOPIC_INIT: _execute_topic_init,
     Stage.PROBLEM_DECOMPOSE: _execute_problem_decompose,
     Stage.SEARCH_STRATEGY: _execute_search_strategy,
@@ -249,21 +257,24 @@ def execute_stage(
         adapters.memory.append("stages", f"{run_id}:{int(stage)}:running")
 
     llm = None
-    try:
-        if config.llm.provider == "acp":
-            llm = create_llm_client(config)
-        else:
-            candidate = LLMClient.from_rc_config(config)
-            if candidate.config.base_url and candidate.config.api_key:
-                llm = candidate
-    except Exception as _llm_exc:  # noqa: BLE001
-        logger.warning("LLM client creation failed: %s", _llm_exc)
-        llm = None
+    if stage != Stage.SEED_SPEC_INGEST:
+        try:
+            if config.llm.provider == "acp":
+                llm = create_llm_client(config)
+            else:
+                candidate = LLMClient.from_rc_config(config)
+                if candidate.config.base_url and candidate.config.api_key:
+                    llm = candidate
+        except Exception as _llm_exc:  # noqa: BLE001
+            logger.warning("LLM client creation failed: %s", _llm_exc)
+            llm = None
 
     try:
         _ = advance(stage, StageStatus.PENDING, TransitionEvent.START)
         executor = _STAGE_EXECUTORS[stage]
-        prompts = PromptManager(config.prompts.custom_file or None)  # type: ignore[attr-defined]
+        prompts = None
+        if stage != Stage.SEED_SPEC_INGEST:
+            prompts = PromptManager(config.prompts.custom_file or None)  # type: ignore[attr-defined]
         try:
             result = executor(
                 stage_dir, run_dir, config, adapters, llm=llm, prompts=prompts

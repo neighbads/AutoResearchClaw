@@ -9,6 +9,7 @@ import pytest
 
 from researchclaw import cli as rc_cli
 from researchclaw.config import resolve_config_path
+from researchclaw.pipeline.stages import Stage
 
 
 def _write_valid_config(path: Path) -> None:
@@ -27,6 +28,34 @@ knowledge_base:
   backend: markdown
   root: kb
 openclaw_bridge: {}
+llm:
+  provider: openai-compatible
+  base_url: http://localhost:1234/v1
+  api_key_env: TEST_KEY
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_valid_seed_config(path: Path, *, seed_spec: Path, seed_repo: Path) -> None:
+    path.write_text(
+        f"""
+project:
+  name: demo
+  mode: docs-first
+research:
+  topic: Synthetic benchmark research
+  seed_spec_path: {seed_spec}
+  seed_repo_path: {seed_repo}
+runtime:
+  timezone: UTC
+notifications:
+  channel: test
+knowledge_base:
+  backend: markdown
+  root: kb
+openclaw_bridge: {{}}
 llm:
   provider: openai-compatible
   base_url: http://localhost:1234/v1
@@ -286,6 +315,142 @@ def test_cmd_run_missing_config_shows_init_hint(
     code = rc_cli.cmd_run(args)
     assert code == 1
     assert "researchclaw init" in capsys.readouterr().err
+
+
+def test_cmd_run_defaults_to_seed_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.arc.yaml"
+    seed_spec = tmp_path / "seed.md"
+    seed_repo = tmp_path / "seed-repo"
+    seed_spec.write_text("# seed\n", encoding="utf-8")
+    seed_repo.mkdir()
+    _write_valid_seed_config(config_path, seed_spec=seed_spec, seed_repo=seed_repo)
+
+    captured: dict[str, object] = {}
+
+    import researchclaw.pipeline.runner as runner_mod
+
+    def fake_execute_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(runner_mod, "execute_pipeline", fake_execute_pipeline)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=None,
+        from_stage=None,
+        auto_approve=False,
+        skip_preflight=True,
+        resume=False,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+    )
+
+    code = rc_cli.cmd_run(args)
+
+    assert code == 0
+    assert captured["from_stage"] == Stage.SEED_SPEC_INGEST
+
+
+def test_cmd_run_allows_explicit_topic_init_start_without_seed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.arc.yaml"
+    _write_valid_config(config_path)
+
+    captured: dict[str, object] = {}
+
+    import researchclaw.pipeline.runner as runner_mod
+
+    def fake_execute_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(runner_mod, "execute_pipeline", fake_execute_pipeline)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=None,
+        from_stage="TOPIC_INIT",
+        auto_approve=False,
+        skip_preflight=True,
+        resume=False,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+    )
+
+    code = rc_cli.cmd_run(args)
+
+    assert code == 0
+    assert captured["from_stage"] == Stage.TOPIC_INIT
+
+
+def test_cmd_run_default_seed_ingest_requires_seed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.arc.yaml"
+    _write_valid_config(config_path)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=None,
+        from_stage=None,
+        auto_approve=False,
+        skip_preflight=True,
+        resume=False,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+    )
+
+    code = rc_cli.cmd_run(args)
+
+    assert code == 1
+    assert "SEED_SPEC_INGEST requires research.seed_spec_path and research.seed_repo_path" in capsys.readouterr().err
+
+
+def test_cmd_run_seed_ingest_validates_paths_before_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.arc.yaml"
+    _write_valid_config(config_path)
+
+    called = {"preflight": False}
+
+    class _FakeClient:
+        def preflight(self):
+            called["preflight"] = True
+            return (True, "OK")
+
+    import researchclaw.llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "create_llm_client", lambda cfg: _FakeClient())
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=None,
+        from_stage=None,
+        auto_approve=False,
+        skip_preflight=False,
+        resume=False,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+    )
+
+    code = rc_cli.cmd_run(args)
+
+    assert code == 1
+    assert called["preflight"] is False
+    assert "SEED_SPEC_INGEST requires research.seed_spec_path and research.seed_repo_path" in capsys.readouterr().err
 
 
 def test_resume_finds_existing_checkpoint_dir(

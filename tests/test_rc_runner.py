@@ -83,7 +83,7 @@ def test_execute_pipeline_runs_stages_in_sequence(
         adapters=adapters,
     )
     assert seen == list(STAGE_SEQUENCE)
-    assert len(results) == 23
+    assert len(results) == len(STAGE_SEQUENCE)
     assert all(r.status == StageStatus.DONE for r in results)
 
 
@@ -110,7 +110,7 @@ def test_execute_pipeline_stops_on_failed_stage(
     )
     assert results[-1].stage == fail_stage
     assert results[-1].status == StageStatus.FAILED
-    assert len(results) == int(fail_stage)
+    assert len(results) == STAGE_SEQUENCE.index(fail_stage) + 1
 
 
 def test_execute_pipeline_stops_on_gate_when_stop_on_gate_enabled(
@@ -137,7 +137,7 @@ def test_execute_pipeline_stops_on_gate_when_stop_on_gate_enabled(
     )
     assert results[-1].stage == gate_stage
     assert results[-1].status == StageStatus.BLOCKED_APPROVAL
-    assert len(results) == int(gate_stage)
+    assert len(results) == STAGE_SEQUENCE.index(gate_stage) + 1
 
 
 def test_execute_pipeline_continues_after_gate_when_stop_on_gate_disabled(
@@ -162,7 +162,7 @@ def test_execute_pipeline_continues_after_gate_when_stop_on_gate_disabled(
         adapters=adapters,
         stop_on_gate=False,
     )
-    assert len(results) == 23
+    assert len(results) == len(STAGE_SEQUENCE)
     assert any(item.status == StageStatus.BLOCKED_APPROVAL for item in results)
 
 
@@ -219,7 +219,7 @@ def test_pipeline_summary_has_expected_fields_and_values(
     )
     assert summary["stages_blocked"] == 1
     assert summary["stages_failed"] == 1
-    assert summary["from_stage"] == 1
+    assert summary["from_stage"] == 0
     assert summary["final_stage"] == int(Stage.HYPOTHESIS_GEN)
     assert summary["final_status"] == "failed"
     assert "generated" in summary
@@ -247,7 +247,7 @@ def test_execute_pipeline_from_stage_skips_earlier_stages(
         from_stage=Stage.PAPER_OUTLINE,
     )
     assert seen[0] == Stage.PAPER_OUTLINE
-    assert len(seen) == len(STAGE_SEQUENCE) - (int(Stage.PAPER_OUTLINE) - 1)
+    assert len(seen) == len(STAGE_SEQUENCE) - STAGE_SEQUENCE.index(Stage.PAPER_OUTLINE)
     assert len(results) == len(seen)
 
 
@@ -291,9 +291,9 @@ def test_execute_pipeline_writes_kb_entries_when_kb_root_provided(
         adapters=adapters,
         kb_root=kb_root,
     )
-    assert len(results) == 23
-    assert len(calls) == 23
-    assert calls[0] == (1, "topic_init", "run-kb")
+    assert len(results) == len(STAGE_SEQUENCE)
+    assert len(calls) == len(STAGE_SEQUENCE)
+    assert calls[0] == (0, "seed_spec_ingest", "run-kb")
 
 
 def test_execute_pipeline_passes_auto_approve_flag_to_execute_stage(
@@ -323,20 +323,20 @@ def test_execute_pipeline_passes_auto_approve_flag_to_execute_stage(
 @pytest.mark.parametrize(
     ("stage", "started", "expected"),
     [
-        (Stage.TOPIC_INIT, False, True),
-        (Stage.PROBLEM_DECOMPOSE, False, False),
+        (Stage.SEED_SPEC_INGEST, False, True),
+        (Stage.TOPIC_INIT, False, False),
         (Stage.PAPER_DRAFT, True, True),
     ],
 )
 def test_should_start_logic(stage: Stage, started: bool, expected: bool) -> None:
-    assert rc_runner._should_start(stage, Stage.TOPIC_INIT, started) is expected
+    assert rc_runner._should_start(stage, Stage.SEED_SPEC_INGEST, started) is expected
 
 
 @pytest.mark.parametrize(
     ("results", "expected_status", "expected_final_stage"),
     [
-        ([], "no_stages", int(Stage.TOPIC_INIT)),
-        ([_done(Stage.TOPIC_INIT)], "done", int(Stage.TOPIC_INIT)),
+        ([], "no_stages", int(Stage.SEED_SPEC_INGEST)),
+        ([_done(Stage.SEED_SPEC_INGEST)], "done", int(Stage.SEED_SPEC_INGEST)),
         (
             [_done(Stage.TOPIC_INIT), _failed(Stage.PROBLEM_DECOMPOSE)],
             "failed",
@@ -350,7 +350,7 @@ def test_build_pipeline_summary_core_fields(
     summary = rc_runner._build_pipeline_summary(
         run_id="run-core",
         results=results,
-        from_stage=Stage.TOPIC_INIT,
+        from_stage=Stage.SEED_SPEC_INGEST,
     )
     assert summary["run_id"] == "run-core"
     assert summary["final_status"] == expected_status
@@ -364,31 +364,18 @@ def test_pipeline_prints_stage_progress(
     adapters: AdapterBundle,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    mock_results = [
-        StageResult(
-            stage=Stage.TOPIC_INIT, status=StageStatus.DONE, artifacts=("topic.json",)
-        ),
-        StageResult(
-            stage=Stage.PROBLEM_DECOMPOSE,
-            status=StageStatus.DONE,
-            artifacts=("tree.json",),
-        ),
-        StageResult(
-            stage=Stage.SEARCH_STRATEGY,
-            status=StageStatus.FAILED,
-            artifacts=(),
-            error="LLM timeout",
-        ),
-    ]
-
-    call_idx = 0
-
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
-        _ = stage, kwargs
-        nonlocal call_idx
-        idx = call_idx
-        call_idx += 1
-        return mock_results[min(idx, len(mock_results) - 1)]
+        _ = kwargs
+        if stage == Stage.SEARCH_STRATEGY:
+            return StageResult(
+                stage=stage,
+                status=StageStatus.FAILED,
+                artifacts=(),
+                error="LLM timeout",
+            )
+        return StageResult(
+            stage=stage, status=StageStatus.DONE, artifacts=("topic.json",)
+        )
 
     monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
     monkeypatch.setattr(rc_runner, "write_stage_to_kb", lambda *args, **kwargs: [])
@@ -401,8 +388,8 @@ def test_pipeline_prints_stage_progress(
     )
 
     captured = capsys.readouterr()
-    assert "TOPIC_INIT — running..." in captured.out
-    assert "TOPIC_INIT — done" in captured.out
+    assert "SEED_SPEC_INGEST — running..." in captured.out
+    assert "SEED_SPEC_INGEST — done" in captured.out
     assert "SEARCH_STRATEGY — FAILED" in captured.out
     assert "LLM timeout" in captured.out
 
@@ -577,8 +564,8 @@ def test_proceed_decision_does_not_trigger_rollback(
         config=rc_config,
         adapters=adapters,
     )
-    # Should be exactly 23 stages, no rollback
-    assert len(seen) == 23
+    # Should be exactly the full stage count, no rollback
+    assert len(seen) == len(STAGE_SEQUENCE)
     assert not (run_dir / "decision_history.json").exists()
 
 
@@ -797,8 +784,8 @@ def test_degraded_quality_gate_continues_pipeline(
         config=rc_config,
         adapters=adapters,
     )
-    # All 23 stages should execute (not stopped at quality gate)
-    assert len(results) == 23
+    # All stages should execute (not stopped at quality gate)
+    assert len(results) == len(STAGE_SEQUENCE)
     assert seen == list(STAGE_SEQUENCE)
     # Quality gate result should have decision="degraded"
     qg_result = [r for r in results if r.stage == Stage.QUALITY_GATE][0]

@@ -104,6 +104,29 @@ def _is_blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def _normalize_blank_string(value: Any) -> str:
+    return "" if _is_blank(value) else str(value)
+
+
+def _resolve_path_against_project_root(
+    project_root: Path | None,
+    raw_value: Any,
+) -> str:
+    """Resolve a user-provided path string relative to project_root.
+
+    This keeps config behavior deterministic across different process CWDs.
+    If project_root is None, returns the normalized raw string (no resolution).
+    """
+    s = _normalize_blank_string(raw_value)
+    if not s:
+        return ""
+    p = Path(s).expanduser()
+    if p.is_absolute() or project_root is None:
+        return str(p)
+    # resolve(strict=False) does not require the path to exist
+    return str((project_root / p).resolve())
+
+
 @dataclass(frozen=True)
 class ValidationResult:
     ok: bool
@@ -124,6 +147,8 @@ class ResearchConfig:
     daily_paper_count: int = 0
     quality_threshold: float = 0.0
     graceful_degradation: bool = True
+    seed_spec_path: str = ""
+    seed_repo_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -758,6 +783,12 @@ class RCConfig:
                 daily_paper_count=int(research.get("daily_paper_count", 0)),
                 quality_threshold=float(research.get("quality_threshold", 0.0)),
                 graceful_degradation=bool(research.get("graceful_degradation", True)),
+                seed_spec_path=_resolve_path_against_project_root(
+                    project_root, research.get("seed_spec_path")
+                ),
+                seed_repo_path=_resolve_path_against_project_root(
+                    project_root, research.get("seed_repo_path")
+                ),
             ),
             runtime=RuntimeConfig(
                 timezone=runtime["timezone"],
@@ -887,10 +918,18 @@ def validate_config(
             errors.append("security.hitl_required_stages must be a list")
         else:
             for stage in hitl_required_stages:
-                if not isinstance(stage, int) or not 1 <= stage <= 23:
+                if isinstance(stage, bool) or not isinstance(stage, int) or not 0 <= stage <= 23:
                     errors.append(
                         f"Invalid security.hitl_required_stages entry: {stage}"
                     )
+    seed_spec_path = _get_by_path(data, "research.seed_spec_path")
+    seed_repo_path = _get_by_path(data, "research.seed_repo_path")
+    spec_set = not _is_blank(seed_spec_path)
+    repo_set = not _is_blank(seed_repo_path)
+    if spec_set ^ repo_set:
+        warnings.append(
+            "research.seed_spec_path and research.seed_repo_path should both be set together."
+        )
 
     exp_mode = _get_by_path(data, "experiment.mode")
     if not _is_blank(exp_mode) and exp_mode not in EXPERIMENT_MODES:

@@ -31,6 +31,122 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 
+def _bounded_snippet(text: str, limit: int) -> str:
+    snippet = text.strip()
+    if not snippet:
+        return ""
+    if len(snippet) <= limit:
+        return snippet
+    truncated = snippet[:limit].rstrip()
+    return f"{truncated}\n... (truncated)"
+
+
+def _read_stage_zero_artifact(run_dir: Path, filename: str) -> str:
+    path = run_dir / "stage-00" / filename
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _format_repo_inventory_summary(inventory: dict[str, object]) -> str | None:
+    if not inventory:
+        return None
+    lines: list[str] = []
+    root = inventory.get("root")
+    if isinstance(root, str) and root:
+        lines.append(f"- Location: {root}")
+    total_files = inventory.get("total_files")
+    if isinstance(total_files, int):
+        lines.append(f"- Total files: {total_files}")
+    total_bytes = inventory.get("total_bytes")
+    if isinstance(total_bytes, int):
+        lines.append(f"- Total bytes: {total_bytes:,}")
+    by_ext = inventory.get("by_extension")
+    if isinstance(by_ext, dict):
+        entries: list[str] = []
+        for ext, count in sorted(by_ext.items())[:4]:
+            key = ext or "(root)"
+            entries.append(f"{key}:{count}")
+        if entries:
+            lines.append(f"- Files by extension: {', '.join(entries)}")
+    key_files = inventory.get("key_files")
+    if isinstance(key_files, list) and key_files:
+        sample = ", ".join(str(k) for k in key_files[:4])
+        suffix = "..." if len(key_files) > 4 else ""
+        lines.append(f"- Key files: {sample}{suffix}")
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
+def _format_api_map_summary(api_map: dict[str, object]) -> str | None:
+    if not api_map:
+        return None
+    lines: list[str] = []
+    function_count = api_map.get("function_count")
+    functions = api_map.get("functions")
+    if isinstance(function_count, (int, float)):
+        lines.append(f"- Function count: {int(function_count)}")
+    elif isinstance(functions, list):
+        lines.append(f"- Function count: {len(functions)}")
+    names: list[str] = []
+    if isinstance(functions, list):
+        for entry in functions:
+            if isinstance(entry, dict):
+                name = entry.get("name")
+            elif isinstance(entry, str):
+                name = entry
+            else:
+                name = None
+            if isinstance(name, str) and name:
+                names.append(name)
+    if names:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            unique.append(name)
+            if len(unique) >= 5:
+                break
+        sample = ", ".join(unique)
+        suffix = "..." if len(names) > len(unique) else ""
+        lines.append(f"- Sample functions: {sample}{suffix}")
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
+def _build_seed_context_block(run_dir: Path) -> str:
+    sections: list[str] = []
+    alignment_text = _read_stage_zero_artifact(run_dir, "seed_spec_code_alignment.md")
+    if alignment_text:
+        snippet = _bounded_snippet(alignment_text, 1600)
+        if snippet:
+            sections.append(f"### Seed Spec-Code Alignment\n{snippet}")
+    inventory_text = _read_stage_zero_artifact(run_dir, "seed_repo_inventory.json")
+    if inventory_text:
+        inventory = _safe_json_loads(inventory_text, {})
+        if isinstance(inventory, dict):
+            summary = _format_repo_inventory_summary(inventory)
+            if summary:
+                sections.append(f"### Seed Repo Inventory Summary\n{summary}")
+    api_text = _read_stage_zero_artifact(run_dir, "seed_api_map.json")
+    if api_text:
+        api_map = _safe_json_loads(api_text, {})
+        if isinstance(api_map, dict):
+            summary = _format_api_map_summary(api_map)
+            if summary:
+                sections.append(f"### Seed API Map Summary\n{summary}")
+    if not sections:
+        return ""
+    return "## Seed Context (Stage 0)\n\n" + "\n\n".join(sections)
+
+
 def _execute_experiment_design(
     stage_dir: Path,
     run_dir: Path,
@@ -44,6 +160,9 @@ def _execute_experiment_design(
     preamble = _build_context_preamble(
         config, run_dir, include_goal=True, include_hypotheses=True
     )
+    seed_context = _build_seed_context_block(run_dir)
+    if seed_context:
+        preamble = f"{preamble}\n\n{seed_context}"
     plan: dict[str, Any] | None = None
 
     # ── Domain detection ──────────────────────────────────────────────────

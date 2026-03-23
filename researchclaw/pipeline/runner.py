@@ -127,7 +127,7 @@ def read_checkpoint(run_dir: Path) -> Stage | None:
 
 
 def resume_from_checkpoint(
-    run_dir: Path, default_stage: Stage = Stage.TOPIC_INIT
+    run_dir: Path, default_stage: Stage = Stage.SEED_SPEC_INGEST
 ) -> Stage:
     """Resolve the stage to resume from using checkpoint metadata."""
     next_stage = read_checkpoint(run_dir)
@@ -410,7 +410,7 @@ def execute_pipeline(
     run_id: str,
     config: RCConfig,
     adapters: AdapterBundle,
-    from_stage: Stage = Stage.TOPIC_INIT,
+    from_stage: Stage = Stage.SEED_SPEC_INGEST,
     auto_approve_gates: bool = False,
     stop_on_gate: bool = False,
     skip_noncritical: bool = False,

@@ -11,7 +11,7 @@ from typing import Any, cast
 import pytest
 
 from researchclaw.adapters import AdapterBundle
-from researchclaw.config import RCConfig
+from researchclaw.config import RCConfig, validate_config
 from researchclaw.pipeline import executor as rc_executor
 from researchclaw.pipeline.stages import Stage, StageStatus
 
@@ -90,9 +90,99 @@ def _write_prior_artifact(
     (stage_dir / filename).write_text(content, encoding="utf-8")
 
 
-def test_executor_map_has_23_entries() -> None:
+def _basic_config_payload(tmp_path: Path) -> dict[str, Any]:
+    return {
+        "project": {"name": "rc-test"},
+        "research": {"topic": "test topic"},
+        "runtime": {"timezone": "UTC"},
+        "notifications": {"channel": "console"},
+        "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+        "llm": {
+            "provider": "openai-compatible",
+            "base_url": "http://localhost:1234/v1",
+            "api_key_env": "RC_TEST_KEY",
+        },
+        "security": {"hitl_required_stages": [5, 9, 20]},
+    }
+
+
+def test_rcconfig_parses_seed_paths(tmp_path: Path) -> None:
+    data = _basic_config_payload(tmp_path)
+    data["research"]["seed_spec_path"] = "seeds/seed_spec.md"
+    data["research"]["seed_repo_path"] = "seeds/repo"
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.research.seed_spec_path == str((tmp_path / "seeds/seed_spec.md").resolve())
+    assert config.research.seed_repo_path == str((tmp_path / "seeds/repo").resolve())
+
+
+def test_validate_config_topic_only_payload_is_valid(tmp_path: Path) -> None:
+    data = {
+        "project": {"name": "legacy-topic"},
+        "research": {"topic": "legacy"},
+        "runtime": {"timezone": "UTC"},
+        "notifications": {"channel": "console"},
+        "knowledge_base": {"backend": "markdown", "root": "docs/kb"},
+        "llm": {
+            "provider": "openai-compatible",
+            "base_url": "http://localhost",
+            "api_key_env": "LEGACY_KEY",
+        },
+    }
+
+    result = validate_config(data, project_root=tmp_path, check_paths=False)
+
+    assert result.ok is True
+
+
+def test_validate_config_warns_when_one_seed_path_set(tmp_path: Path) -> None:
+    data = _basic_config_payload(tmp_path)
+    data["research"]["seed_spec_path"] = "spec.yaml"
+
+    result = validate_config(data, project_root=tmp_path, check_paths=False)
+
+    assert result.ok is True
+    assert any(
+        "seed_spec_path" in warning and "seed_repo_path" in warning
+        for warning in result.warnings
+    )
+
+
+def test_validate_config_accepts_stage_zero(tmp_path: Path) -> None:
+    data = _basic_config_payload(tmp_path)
+    data["security"]["hitl_required_stages"] = [0, 5, 9, 20]
+
+    result = validate_config(data, project_root=tmp_path, check_paths=False)
+
+    assert result.ok is True
+    assert not result.errors
+
+
+def test_validate_config_whitespace_seed_path_is_blank(tmp_path: Path) -> None:
+    data = _basic_config_payload(tmp_path)
+    data["research"]["seed_spec_path"] = "   "
+
+    result = validate_config(data, project_root=tmp_path, check_paths=False)
+
+    assert result.ok is True
+    assert not result.warnings
+
+
+def test_rcconfig_normalizes_blank_seed_paths(tmp_path: Path) -> None:
+    data = _basic_config_payload(tmp_path)
+    data["research"]["seed_spec_path"] = "   "
+    data["research"]["seed_repo_path"] = "\n"
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.research.seed_spec_path == ""
+    assert config.research.seed_repo_path == ""
+
+
+def test_executor_map_has_24_entries() -> None:
     executor_map = getattr(rc_executor, "EXECUTOR_MAP", rc_executor._STAGE_EXECUTORS)
-    assert len(executor_map) == 23
+    assert len(executor_map) == 24
 
 
 def test_every_stage_member_has_matching_executor() -> None:
@@ -278,6 +368,11 @@ def test_execute_stage_creates_stage_dir_writes_artifacts_and_meta(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    # Stage 1 now depends on deterministic seed artifacts from Stage 0.
+    _write_prior_artifact(run_dir, 0, "seed_claims.json", "[]")
+    _write_prior_artifact(run_dir, 0, "seed_open_questions.md", "# Seed Questions\n\n- Q\n")
+    _write_prior_artifact(run_dir, 0, "seed_spec_outline.md", "# Seed Outline\n\n- H\n")
+
     fake_llm = FakeLLMClientWithConfig("# Goal\n\nMocked goal body")
     monkeypatch.setattr(
         "researchclaw.pipeline.executor.LLMClient.from_rc_config",
@@ -322,6 +417,10 @@ def test_execute_stage_contract_validation_missing_output_file_marks_failed(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    _write_prior_artifact(run_dir, 0, "seed_claims.json", "[]")
+    _write_prior_artifact(run_dir, 0, "seed_open_questions.md", "# Seed Questions\n\n- Q\n")
+    _write_prior_artifact(run_dir, 0, "seed_spec_outline.md", "# Seed Outline\n\n- H\n")
+
     def bad_executor(
         _stage_dir: Path,
         _run_dir: Path,
@@ -499,6 +598,10 @@ def test_execute_stage_llm_client_creation_error_falls_back_without_crash(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    _write_prior_artifact(run_dir, 0, "seed_claims.json", "[]")
+    _write_prior_artifact(run_dir, 0, "seed_open_questions.md", "# Seed Questions\n\n- Q\n")
+    _write_prior_artifact(run_dir, 0, "seed_spec_outline.md", "# Seed Outline\n\n- H\n")
+
     def boom(_config: RCConfig):
         raise RuntimeError("llm init failed")
 
@@ -515,12 +618,583 @@ def test_execute_stage_llm_client_creation_error_falls_back_without_crash(
     assert (run_dir / "stage-01" / "goal.md").exists()
 
 
+def test_execute_stage_topic_init_supports_legacy_no_seed_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.hardware import HardwareProfile
+
+    monkeypatch.setattr(
+        "researchclaw.pipeline.stage_impls._topic.detect_hardware",
+        lambda: HardwareProfile(
+            has_gpu=False,
+            gpu_type="cpu",
+            gpu_name="CPU only",
+            vram_mb=None,
+            tier="cpu_only",
+            warning="",
+        ),
+    )
+
+    def boom(_config: RCConfig):
+        raise RuntimeError("llm init failed")
+
+    monkeypatch.setattr("researchclaw.pipeline.executor.LLMClient.from_rc_config", boom)
+
+    result = rc_executor.execute_stage(
+        Stage.TOPIC_INIT,
+        run_dir=run_dir,
+        run_id="run-topic-no-seed",
+        config=rc_config,
+        adapters=adapters,
+        auto_approve_gates=True,
+    )
+
+    assert result.status == StageStatus.DONE
+    goal = (run_dir / "stage-01" / "goal.md").read_text(encoding="utf-8")
+    assert "SMART Goal" in goal
+
+
+def test_topic_init_seed_aware_goal_when_seed_artifacts_present(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.hardware import HardwareProfile
+    from researchclaw.pipeline.stage_impls._topic import _execute_topic_init
+
+    # Keep tests stable on GPU machines: force CPU-only so we never try to install torch.
+    monkeypatch.setattr(
+        "researchclaw.pipeline.stage_impls._topic.detect_hardware",
+        lambda: HardwareProfile(
+            has_gpu=False,
+            gpu_type="cpu",
+            gpu_name="CPU only",
+            vram_mb=None,
+            tier="cpu_only",
+            warning="",
+        ),
+    )
+
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_claims.json",
+        json.dumps(
+            [
+                {
+                    "id": "C0001",
+                    "strength": "MUST",
+                    "heading": "Protocol",
+                    "text": "The system MUST validate signatures end-to-end.",
+                }
+            ]
+        ),
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_open_questions.md",
+        "# Seed Open Questions\n\n- [MUST] Where is signature validation implemented?\n",
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_spec_outline.md",
+        "# Seed Spec Outline\n\n- Protocol\n  - Signatures\n",
+    )
+
+    stage_dir = run_dir / "stage-01"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    result = _execute_topic_init(stage_dir, run_dir, rc_config, adapters, llm=None)
+
+    assert result.status == StageStatus.DONE
+    goal = (stage_dir / "goal.md").read_text(encoding="utf-8")
+    # Seed-aware: explicitly reflect seed claims + open questions rather than only generic topic prose.
+    assert "Seed Spec Outline" in goal
+    assert "The system MUST validate signatures end-to-end" in goal
+    assert "Where is signature validation implemented" in goal
+    assert "## Scope" in goal
+    assert "## SMART Goal" in goal
+    assert "## Success Criteria" in goal
+    assert "test-driven science" in goal
+
+
+def test_topic_init_topic_only_fallback_when_seed_artifacts_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.hardware import HardwareProfile
+    from researchclaw.pipeline.stage_impls._topic import _execute_topic_init
+
+    monkeypatch.setattr(
+        "researchclaw.pipeline.stage_impls._topic.detect_hardware",
+        lambda: HardwareProfile(
+            has_gpu=False,
+            gpu_type="cpu",
+            gpu_name="CPU only",
+            vram_mb=None,
+            tier="cpu_only",
+            warning="",
+        ),
+    )
+
+    stage_dir = run_dir / "stage-01"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    result = _execute_topic_init(stage_dir, run_dir, rc_config, adapters, llm=None)
+
+    assert result.status == StageStatus.DONE
+    goal = (stage_dir / "goal.md").read_text(encoding="utf-8")
+    assert "test-driven science" in goal
+    assert "SMART Goal" in goal
+    assert "Seed Spec Outline" not in goal
+
+
+def test_topic_init_llm_prompt_includes_seed_gap_and_compatibility_context(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.hardware import HardwareProfile
+    from researchclaw.pipeline.stage_impls._topic import _execute_topic_init
+
+    monkeypatch.setattr(
+        "researchclaw.pipeline.stage_impls._topic.detect_hardware",
+        lambda: HardwareProfile(
+            has_gpu=False,
+            gpu_type="cpu",
+            gpu_name="CPU only",
+            vram_mb=None,
+            tier="cpu_only",
+            warning="",
+        ),
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_claims.json",
+        json.dumps(
+            [
+                {
+                    "id": "C0001",
+                    "strength": "MUST",
+                    "heading": "Protocol",
+                    "text": "The system MUST validate signatures end-to-end.",
+                }
+            ]
+        ),
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_open_questions.md",
+        "# Seed Open Questions\n\n- [MUST] Where is signature validation implemented?\n",
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_spec_outline.md",
+        "# Seed Spec Outline\n\n- Protocol\n  - Signatures\n",
+    )
+
+    fake_llm = FakeLLMClient("# Goal\n\nLLM goal body")
+    stage_dir = run_dir / "stage-01"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    result = _execute_topic_init(stage_dir, run_dir, rc_config, adapters, llm=fake_llm)
+
+    assert result.status == StageStatus.DONE
+    assert fake_llm.calls
+    prompt = fake_llm.calls[0][0]["content"]
+    assert "implementation gaps" in prompt.lower()
+    assert "compatibility questions" in prompt.lower()
+
+
+def test_problem_decompose_seed_aware_problem_tree_includes_seed_categories(
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stage_impls._topic import _execute_problem_decompose
+
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_claims.json",
+        json.dumps(
+            [
+                {
+                    "id": "C0001",
+                    "strength": "MUST",
+                    "heading": "Protocol",
+                    "text": "The system MUST validate signatures end-to-end.",
+                    "keywords": ["tls"],
+                }
+            ]
+        ),
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_open_questions.md",
+        "# Seed Open Questions\n\n- [MUST] Where is signature validation implemented?\n",
+    )
+    _write_prior_artifact(
+        run_dir,
+        1,
+        "goal.md",
+        "# Goal\n\nValidate seed claims and answer open questions.\n",
+    )
+
+    stage_dir = run_dir / "stage-02"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    result = _execute_problem_decompose(
+        stage_dir, run_dir, rc_config, adapters, llm=None
+    )
+
+    assert result.status == StageStatus.DONE
+    tree = (stage_dir / "problem_tree.md").read_text(encoding="utf-8")
+    # Seed-aware: surface concrete categories derived from seed inputs.
+    assert "## Sub-questions" in tree
+    assert "## Priority Ranking" in tree
+    assert "## Risks" in tree
+    assert "Validation" in tree
+    assert "Implementation" in tree
+    assert "implementation gaps" in tree.lower()
+    assert "Compatibility" in tree
+    assert "Deployment" in tree
+    assert "Comparison" in tree
+    assert "C0001" in tree or "validate signatures" in tree
+
+
+def test_problem_decompose_llm_prompt_includes_seed_question_categories(
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stage_impls._topic import _execute_problem_decompose
+
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_claims.json",
+        json.dumps(
+            [
+                {
+                    "id": "C0001",
+                    "strength": "MUST",
+                    "heading": "Protocol",
+                    "text": "The system MUST validate signatures end-to-end.",
+                }
+            ]
+        ),
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_open_questions.md",
+        "# Seed Open Questions\n\n- [MUST] Where is signature validation implemented?\n",
+    )
+    _write_prior_artifact(
+        run_dir,
+        1,
+        "goal.md",
+        "# Goal\n\nValidate seed claims and answer open questions.\n",
+    )
+
+    fake_llm = FakeLLMClient("# Problem Decomposition\n\nLLM body")
+    stage_dir = run_dir / "stage-02"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    result = _execute_problem_decompose(
+        stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+    )
+
+    assert result.status == StageStatus.DONE
+    assert fake_llm.calls
+    prompt = fake_llm.calls[0][0]["content"]
+    assert "Implementation Questions" in prompt
+    assert "implementation gaps" in prompt.lower()
+    assert "Compatibility Questions" in prompt
+
+
+def test_problem_decompose_uses_outline_only_seed_artifact_as_seed_context(
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stage_impls._topic import _execute_problem_decompose
+
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_spec_outline.md",
+        "# Seed Spec Outline\n\n- Protocol\n  - Key exchange\n",
+    )
+    _write_prior_artifact(
+        run_dir,
+        1,
+        "goal.md",
+        "# Goal\n\nUse the outline as the seed context.\n",
+    )
+
+    stage_dir = run_dir / "stage-02"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    result = _execute_problem_decompose(
+        stage_dir, run_dir, rc_config, adapters, llm=None
+    )
+
+    assert result.status == StageStatus.DONE
+    tree = (stage_dir / "problem_tree.md").read_text(encoding="utf-8")
+    assert "Stage 0 seed artifacts" in tree
+    assert "Validation Questions" in tree
+
+
+def test_problem_decompose_topic_only_fallback_when_seed_artifacts_absent(
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stage_impls._topic import _execute_problem_decompose
+
+    _write_prior_artifact(run_dir, 1, "goal.md", "# Goal\n\nOnly topic-driven goal.\n")
+
+    stage_dir = run_dir / "stage-02"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    result = _execute_problem_decompose(
+        stage_dir, run_dir, rc_config, adapters, llm=None
+    )
+
+    assert result.status == StageStatus.DONE
+    tree = (stage_dir / "problem_tree.md").read_text(encoding="utf-8")
+    assert "## Sub-questions" in tree
+    assert "Validation Questions" not in tree
+
+
+def test_experiment_design_includes_seed_alignment_context(
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stage_impls._experiment_design import (
+        _execute_experiment_design,
+    )
+
+    _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypotheses\n\n- H1\n")
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_spec_code_alignment.md",
+        "spec-defined and not yet found in code",
+    )
+    repo_inventory = {
+        "root": str(run_dir / "seed_repo"),
+        "total_files": 12,
+        "total_bytes": 20480,
+        "by_extension": {".md": 5, ".py": 3, ".txt": 4},
+        "key_files": ["README.md", "crypto/x509_notes.md"],
+    }
+    _write_prior_artifact(
+        run_dir, 0, "seed_repo_inventory.json", json.dumps(repo_inventory)
+    )
+    api_map = {
+        "function_count": 2,
+        "functions": [
+            {"name": "encrypt_tls"},
+            {"name": "verify_signature"},
+        ],
+    }
+    _write_prior_artifact(run_dir, 0, "seed_api_map.json", json.dumps(api_map))
+
+    llm = FakeLLMClient(
+        "baselines: []\n"
+        "proposed_methods: []\n"
+        "ablations: []\n"
+        "datasets: []\n"
+        "metrics: []\n"
+        "objectives: []\n"
+        "risks: []\n"
+        "compute_budget: {}\n"
+    )
+    stage_dir = run_dir / "stage-09"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    result = _execute_experiment_design(
+        stage_dir, run_dir, rc_config, adapters, llm=llm
+    )
+
+    assert result.status == StageStatus.DONE
+    assert llm.calls
+    prompt = llm.calls[0][0]["content"]
+    assert "spec-defined and not yet found in code" in prompt
+    assert "x509" in prompt
+    assert "## Seed Context (Stage 0)" in prompt
+    assert "Seed Spec-Code Alignment" in prompt
+    assert "Seed Repo Inventory Summary" in prompt
+    assert "- Location: " in prompt
+    assert "- Total files: 12" in prompt
+    assert "- Key files: README.md, crypto/x509_notes.md" in prompt
+    assert "Seed API Map Summary" in prompt
+    assert "- Function count: 2" in prompt
+    assert "- Sample functions: encrypt_tls, verify_signature" in prompt
+    assert (stage_dir / "exp_plan.yaml").exists()
+
+
+def test_experiment_design_reads_seed_context_only_from_stage_zero(
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stage_impls._experiment_design import (
+        _execute_experiment_design,
+    )
+
+    _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypotheses\n\n- H1\n")
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_spec_code_alignment.md",
+        "stage-zero alignment",
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_repo_inventory.json",
+        json.dumps({"root": "/seed", "total_files": 3}),
+    )
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_api_map.json",
+        json.dumps({"function_count": 1, "functions": [{"name": "seed_fn"}]}),
+    )
+
+    _write_prior_artifact(
+        run_dir,
+        11,
+        "seed_spec_code_alignment.md",
+        "newer non-seed alignment",
+    )
+    _write_prior_artifact(
+        run_dir,
+        11,
+        "seed_repo_inventory.json",
+        json.dumps({"root": "/wrong", "total_files": 999}),
+    )
+    _write_prior_artifact(
+        run_dir,
+        11,
+        "seed_api_map.json",
+        json.dumps({"function_count": 1, "functions": [{"name": "wrong_fn"}]}),
+    )
+
+    llm = FakeLLMClient(
+        "baselines: []\n"
+        "proposed_methods: []\n"
+        "ablations: []\n"
+        "datasets: []\n"
+        "metrics: []\n"
+        "objectives: []\n"
+        "risks: []\n"
+        "compute_budget: {}\n"
+    )
+    stage_dir = run_dir / "stage-09"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    result = _execute_experiment_design(
+        stage_dir, run_dir, rc_config, adapters, llm=llm
+    )
+
+    assert result.status == StageStatus.DONE
+    prompt = llm.calls[0][0]["content"]
+    assert "stage-zero alignment" in prompt
+    assert "seed_fn" in prompt
+    assert "/seed" in prompt
+    assert "newer non-seed alignment" not in prompt
+    assert "wrong_fn" not in prompt
+    assert "/wrong" not in prompt
+
+
+def test_execute_stage_problem_decompose_supports_legacy_goal_only_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    _write_prior_artifact(run_dir, 1, "goal.md", "# Goal\n\nOnly topic-driven goal.\n")
+
+    def boom(_config: RCConfig):
+        raise RuntimeError("llm init failed")
+
+    monkeypatch.setattr("researchclaw.pipeline.executor.LLMClient.from_rc_config", boom)
+
+    result = rc_executor.execute_stage(
+        Stage.PROBLEM_DECOMPOSE,
+        run_dir=run_dir,
+        run_id="run-problem-no-seed",
+        config=rc_config,
+        adapters=adapters,
+        auto_approve_gates=True,
+    )
+
+    assert result.status == StageStatus.DONE
+    tree = (run_dir / "stage-02" / "problem_tree.md").read_text(encoding="utf-8")
+    assert "## Sub-questions" in tree
+
+
+def test_execute_stage_problem_decompose_accepts_outline_only_seed_context(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    _write_prior_artifact(
+        run_dir,
+        0,
+        "seed_spec_outline.md",
+        "# Seed Spec Outline\n\n- Protocol\n  - Key exchange\n",
+    )
+    _write_prior_artifact(
+        run_dir,
+        1,
+        "goal.md",
+        "# Goal\n\nUse the outline as the seed context.\n",
+    )
+
+    def boom(_config: RCConfig):
+        raise RuntimeError("llm init failed")
+
+    monkeypatch.setattr("researchclaw.pipeline.executor.LLMClient.from_rc_config", boom)
+
+    result = rc_executor.execute_stage(
+        Stage.PROBLEM_DECOMPOSE,
+        run_dir=run_dir,
+        run_id="run-problem-outline-only",
+        config=rc_config,
+        adapters=adapters,
+        auto_approve_gates=True,
+    )
+
+    assert result.status == StageStatus.DONE
+    tree = (run_dir / "stage-02" / "problem_tree.md").read_text(encoding="utf-8")
+    assert "Stage 0 seed artifacts" in tree
+
+
 def test_execute_stage_executor_exception_returns_failed(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    _write_prior_artifact(run_dir, 0, "seed_claims.json", "[]")
+    _write_prior_artifact(run_dir, 0, "seed_open_questions.md", "# Seed Questions\n\n- Q\n")
+    _write_prior_artifact(run_dir, 0, "seed_spec_outline.md", "# Seed Outline\n\n- H\n")
+
     def raising_executor(
         _stage_dir: Path,
         _run_dir: Path,
@@ -577,6 +1251,10 @@ class TestStageHealth:
             Path(__file__).parent.parent / "config.researchclaw.example.yaml",
             check_paths=False,
         )
+        _write_prior_artifact(tmp_path, 0, "seed_claims.json", "[]")
+        _write_prior_artifact(tmp_path, 0, "seed_open_questions.md", "# Seed Questions\n\n- Q\n")
+        _write_prior_artifact(tmp_path, 0, "seed_spec_outline.md", "# Seed Outline\n\n- H\n")
+
         result = execute_stage(
             Stage.TOPIC_INIT,
             run_dir=tmp_path,
@@ -587,6 +1265,7 @@ class TestStageHealth:
         )
         health_path = tmp_path / "stage-01" / "stage_health.json"
         assert result is not None
+        assert result.status == StageStatus.DONE
         assert health_path.exists()
 
     def test_stage_health_has_required_fields(self, tmp_path: Path) -> None:
@@ -599,6 +1278,11 @@ class TestStageHealth:
             Path(__file__).parent.parent / "config.researchclaw.example.yaml",
             check_paths=False,
         )
+        _write_prior_artifact(tmp_path, 0, "seed_claims.json", "[]")
+        _write_prior_artifact(
+            tmp_path, 0, "seed_open_questions.md", "# Seed Questions\n\n- Q\n"
+        )
+        _write_prior_artifact(tmp_path, 0, "seed_spec_outline.md", "# Seed Outline\n\n- H\n")
 
         with patch("researchclaw.pipeline.executor.LLMClient") as mock_llm_cls:
             mock_client = MagicMock()
@@ -607,7 +1291,7 @@ class TestStageHealth:
             )
             mock_llm_cls.from_rc_config.return_value = mock_client
 
-            execute_stage(
+            result = execute_stage(
                 Stage.TOPIC_INIT,
                 run_dir=tmp_path,
                 run_id="test-health-fields",
@@ -615,16 +1299,17 @@ class TestStageHealth:
                 adapters=AdapterBundle(),
                 auto_approve_gates=True,
             )
+            assert result.status == StageStatus.DONE
 
         health_path = tmp_path / "stage-01" / "stage_health.json"
-        if health_path.exists():
-            data = json.loads(health_path.read_text(encoding="utf-8"))
-            assert "stage_id" in data
-            assert "run_id" in data
-            assert "duration_sec" in data
-            assert "status" in data
-            assert "timestamp" in data
-            assert data["duration_sec"] >= 0
+        assert health_path.exists()
+        data = json.loads(health_path.read_text(encoding="utf-8"))
+        assert "stage_id" in data
+        assert "run_id" in data
+        assert "duration_sec" in data
+        assert "status" in data
+        assert "timestamp" in data
+        assert data["duration_sec"] >= 0
 
 
     def test_stage_health_duration_positive(self, tmp_path: Path) -> None:
@@ -637,6 +1322,11 @@ class TestStageHealth:
             Path(__file__).parent.parent / "config.researchclaw.example.yaml",
             check_paths=False,
         )
+        _write_prior_artifact(tmp_path, 0, "seed_claims.json", "[]")
+        _write_prior_artifact(
+            tmp_path, 0, "seed_open_questions.md", "# Seed Questions\n\n- Q\n"
+        )
+        _write_prior_artifact(tmp_path, 0, "seed_spec_outline.md", "# Seed Outline\n\n- H\n")
 
         with patch("researchclaw.pipeline.executor.LLMClient") as mock_llm_cls:
             mock_client = MagicMock()
@@ -645,7 +1335,7 @@ class TestStageHealth:
             )
             mock_llm_cls.from_rc_config.return_value = mock_client
 
-            execute_stage(
+            result = execute_stage(
                 Stage.TOPIC_INIT,
                 run_dir=tmp_path,
                 run_id="test-duration",
@@ -653,11 +1343,12 @@ class TestStageHealth:
                 adapters=AdapterBundle(),
                 auto_approve_gates=True,
             )
+            assert result.status == StageStatus.DONE
 
         health_path = tmp_path / "stage-01" / "stage_health.json"
-        if health_path.exists():
-            data = json.loads(health_path.read_text(encoding="utf-8"))
-            assert data["duration_sec"] >= 0
+        assert health_path.exists()
+        data = json.loads(health_path.read_text(encoding="utf-8"))
+        assert data["duration_sec"] >= 0
 
 # Contracts import for Stage 13/22 preservation features.
 from researchclaw.pipeline.contracts import CONTRACTS

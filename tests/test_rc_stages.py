@@ -20,20 +20,18 @@ from researchclaw.pipeline.stages import (
 )
 
 
-def test_stage_enum_has_exactly_23_members():
-    assert len(Stage) == 23
+def test_stage_enum_has_exactly_24_members():
+    assert len(Stage) == 24
 
 
-@pytest.mark.parametrize(
-    "index,stage", [(idx, stage) for idx, stage in enumerate(STAGE_SEQUENCE, start=1)]
-)
+@pytest.mark.parametrize("index,stage", tuple(enumerate(STAGE_SEQUENCE)))
 def test_stage_values_follow_sequence_order(index: int, stage: Stage):
     assert int(stage) == index
 
 
-def test_stage_sequence_contains_all_23_stages_in_order():
-    assert len(STAGE_SEQUENCE) == 23
-    assert STAGE_SEQUENCE[0] is Stage.TOPIC_INIT
+def test_stage_sequence_contains_all_stages_in_order():
+    assert len(STAGE_SEQUENCE) == 24
+    assert STAGE_SEQUENCE[0] is Stage.SEED_SPEC_INGEST
     assert STAGE_SEQUENCE[-1] is Stage.CITATION_VERIFY
     assert tuple(Stage) == STAGE_SEQUENCE
 
@@ -44,7 +42,7 @@ def test_next_stage_boundary_values():
 
 
 def test_previous_stage_boundary_values():
-    assert PREVIOUS_STAGE[Stage.TOPIC_INIT] is None
+    assert PREVIOUS_STAGE[Stage.TOPIC_INIT] is Stage.SEED_SPEC_INGEST
     assert PREVIOUS_STAGE[Stage.PROBLEM_DECOMPOSE] is Stage.TOPIC_INIT
 
 
@@ -62,8 +60,9 @@ def test_gate_rollback_map_matches_expected_targets():
     }
 
 
-def test_phase_map_has_8_phases_with_expected_membership():
-    assert len(PHASE_MAP) == 8
+def test_phase_map_has_9_phases_with_expected_membership():
+    assert len(PHASE_MAP) == 9
+    assert PHASE_MAP["0: Seed Ingest"] == (Stage.SEED_SPEC_INGEST,)
     assert PHASE_MAP["A: Research Scoping"] == (
         Stage.TOPIC_INIT,
         Stage.PROBLEM_DECOMPOSE,
@@ -107,7 +106,7 @@ def test_phase_map_has_8_phases_with_expected_membership():
 
 def test_phase_map_covers_all_stages_exactly_once():
     flattened = tuple(stage for stages in PHASE_MAP.values() for stage in stages)
-    assert len(flattened) == 23
+    assert len(flattened) == 24
     assert set(flattened) == set(Stage)
 
 
@@ -192,6 +191,17 @@ def test_reject_event_uses_explicit_rollback_stage_when_provided():
     assert outcome.next_stage is Stage.PAPER_OUTLINE
     assert outcome.rollback_stage is Stage.PAPER_OUTLINE
 
+
+def test_reject_event_respects_zero_valued_rollback_override():
+    outcome = advance(
+        Stage.LITERATURE_SCREEN,
+        StageStatus.BLOCKED_APPROVAL,
+        TransitionEvent.REJECT,
+        rollback_stage=Stage.SEED_SPEC_INGEST,
+    )
+
+    assert outcome.stage is Stage.SEED_SPEC_INGEST
+    assert outcome.next_stage is Stage.SEED_SPEC_INGEST
 
 def test_timeout_event_transitions_to_paused_with_block_decision():
     outcome = advance(
@@ -282,7 +292,11 @@ def test_default_rollback_stage_for_unknown_stage_uses_previous_stage():
 
 
 def test_default_rollback_stage_for_first_stage_returns_self():
-    assert default_rollback_stage(Stage.TOPIC_INIT) is Stage.TOPIC_INIT
+    assert default_rollback_stage(Stage.SEED_SPEC_INGEST) is Stage.SEED_SPEC_INGEST
+
+
+def test_default_rollback_stage_uses_previous_stage_when_available():
+    assert default_rollback_stage(Stage.TOPIC_INIT) is Stage.SEED_SPEC_INGEST
 
 
 def test_transition_outcome_field_values_are_exposed():

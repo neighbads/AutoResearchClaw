@@ -1,4 +1,4 @@
-"""Stage I/O contracts for the 23-stage ResearchClaw pipeline.
+"""Stage I/O contracts for the 24-stage ResearchClaw pipeline.
 
 Each StageContract declares:
   - input_files: artifacts this stage reads (produced by prior stages)
@@ -26,6 +26,23 @@ class StageContract:
 
 
 CONTRACTS: dict[Stage, StageContract] = {
+    # Phase 0: Seed Ingest
+    Stage.SEED_SPEC_INGEST: StageContract(
+        stage=Stage.SEED_SPEC_INGEST,
+        input_files=(),
+        output_files=(
+            "seed_manifest.json",
+            "seed_spec_outline.md",
+            "seed_claims.json",
+            "seed_open_questions.md",
+            "seed_repo_inventory.json",
+            "seed_repo_keyfiles.md",
+            "seed_api_map.json",
+            "seed_spec_code_alignment.md",
+        ),
+        dod="Normalized seed spec and repository artifacts for downstream planning",
+        error_code="E00_SEED_INGEST_FAIL",
+    ),
     # Phase A: Research Scoping
     Stage.TOPIC_INIT: StageContract(
         stage=Stage.TOPIC_INIT,
@@ -91,7 +108,12 @@ CONTRACTS: dict[Stage, StageContract] = {
     # Phase D: Experiment Design
     Stage.EXPERIMENT_DESIGN: StageContract(
         stage=Stage.EXPERIMENT_DESIGN,
-        input_files=("hypotheses.md",),
+        input_files=(
+            "hypotheses.md",
+            "seed_spec_code_alignment.md",
+            "seed_repo_inventory.json",
+            "seed_api_map.json",
+        ),
         output_files=("exp_plan.yaml",),
         dod="Experiment plan with baselines, ablations, metrics approved",
         error_code="E09_GATE_REJECT",

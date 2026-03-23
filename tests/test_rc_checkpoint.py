@@ -55,7 +55,7 @@ class TestCheckpoint:
         assert read_checkpoint(tmp_path) is None
 
     def test_resume_from_checkpoint_uses_default(self, tmp_path: Path):
-        assert resume_from_checkpoint(tmp_path) == Stage.TOPIC_INIT
+        assert resume_from_checkpoint(tmp_path) == Stage.SEED_SPEC_INGEST
 
     def test_resume_from_checkpoint_uses_next_stage(self, tmp_path: Path):
         _write_checkpoint(tmp_path, Stage.SEARCH_STRATEGY, "run-x")
@@ -164,7 +164,7 @@ class TestContentMetrics:
         summary = _build_pipeline_summary(
             run_id="test",
             results=results,
-            from_stage=Stage.TOPIC_INIT,
+            from_stage=Stage.SEED_SPEC_INGEST,
             run_dir=tmp_path,
         )
         assert "content_metrics" in summary

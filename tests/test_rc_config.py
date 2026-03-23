@@ -142,7 +142,7 @@ def test_validate_config_rejects_invalid_knowledge_base_backend(tmp_path: Path):
     assert "Invalid knowledge_base.backend: sqlite" in result.errors
 
 
-@pytest.mark.parametrize("entry", [0, 24, "5", 9.1])
+@pytest.mark.parametrize("entry", [24, "5", 9.1, -1])
 def test_validate_config_rejects_invalid_hitl_required_stages_entries(
     tmp_path: Path, entry: object
 ):
@@ -153,6 +153,17 @@ def test_validate_config_rejects_invalid_hitl_required_stages_entries(
 
     assert result.ok is False
     assert f"Invalid security.hitl_required_stages entry: {entry}" in result.errors
+
+
+def test_validate_config_rejects_bool_hitl_required_stages_entries(tmp_path: Path):
+    data = _valid_config_data()
+    data["security"]["hitl_required_stages"] = [False, 5, True]
+
+    result = validate_config(data, project_root=tmp_path, check_paths=False)
+
+    assert result.ok is False
+    assert "Invalid security.hitl_required_stages entry: False" in result.errors
+    assert "Invalid security.hitl_required_stages entry: True" in result.errors
 
 
 def test_validate_config_rejects_non_list_hitl_required_stages(tmp_path: Path):

@@ -1,5 +1,6 @@
 HANDOFF_METACLAW_SKILL_LOOP.md
 .venv/
+.worktrees/
 __pycache__/
 *.pyc
 *.egg-info/

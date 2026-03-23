@@ -170,6 +170,12 @@ def _validate_seed_ingest_inputs(config: RCConfig) -> str | None:
     return None
 
 
+def _has_seed_ingest_inputs(config: RCConfig) -> bool:
+    seed_spec = (config.research.seed_spec_path or "").strip()
+    seed_repo = (config.research.seed_repo_path or "").strip()
+    return bool(seed_spec and seed_repo)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     resolved = _resolve_config_or_exit(args)
     if resolved is None:
@@ -272,6 +278,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         if resumed is not None:
             from_stage = resumed
             print(f"Resuming from checkpoint: Stage {int(from_stage)}: {from_stage.name}")
+    elif not _has_seed_ingest_inputs(config):
+        from_stage = Stage.TOPIC_INIT
+        print("No seed inputs configured; starting from Stage 1: TOPIC_INIT")
 
     if from_stage is Stage.SEED_SPEC_INGEST:
         seed_error = _validate_seed_ingest_inputs(config)

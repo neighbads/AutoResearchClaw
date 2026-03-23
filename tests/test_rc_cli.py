@@ -391,12 +391,22 @@ def test_cmd_run_allows_explicit_topic_init_start_without_seed_paths(
     assert captured["from_stage"] == Stage.TOPIC_INIT
 
 
-def test_cmd_run_default_seed_ingest_requires_seed_paths(
+def test_cmd_run_defaults_to_topic_init_without_seed_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "config.arc.yaml"
     _write_valid_config(config_path)
+
+    captured: dict[str, object] = {}
+
+    import researchclaw.pipeline.runner as runner_mod
+
+    def fake_execute_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(runner_mod, "execute_pipeline", fake_execute_pipeline)
 
     args = argparse.Namespace(
         config=str(config_path),
@@ -412,8 +422,9 @@ def test_cmd_run_default_seed_ingest_requires_seed_paths(
 
     code = rc_cli.cmd_run(args)
 
-    assert code == 1
-    assert "SEED_SPEC_INGEST requires research.seed_spec_path and research.seed_repo_path" in capsys.readouterr().err
+    assert code == 0
+    assert captured["from_stage"] == Stage.TOPIC_INIT
+    assert "No seed inputs configured; starting from Stage 1: TOPIC_INIT" in capsys.readouterr().out
 
 
 def test_cmd_run_seed_ingest_validates_paths_before_preflight(
@@ -438,7 +449,7 @@ def test_cmd_run_seed_ingest_validates_paths_before_preflight(
         config=str(config_path),
         topic=None,
         output=None,
-        from_stage=None,
+        from_stage="SEED_SPEC_INGEST",
         auto_approve=False,
         skip_preflight=False,
         resume=False,

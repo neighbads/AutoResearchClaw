@@ -138,6 +138,27 @@ def test_check_llm_connectivity_http_error() -> None:
     assert "503" in result.detail
 
 
+def test_check_llm_connectivity_head_404_but_get_401_is_reachable() -> None:
+    def fake_urlopen(
+        req: urllib.request.Request | str, timeout: int = 0
+    ) -> _DummyHTTPResponse:
+        _ = timeout
+        if isinstance(req, urllib.request.Request):
+            if req.get_method() == "HEAD":
+                raise urllib.error.HTTPError(
+                    req.full_url, 404, "not found", {}, None
+                )
+            raise urllib.error.HTTPError(
+                req.full_url, 401, "unauthorized", {}, None
+            )
+        raise AssertionError("Expected a Request object")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        result = health.check_llm_connectivity("https://api.example.com/v1")
+    assert result.status == "pass"
+    assert "Reachable" in result.detail
+
+
 def test_check_api_key_valid() -> None:
     with patch(
         "urllib.request.urlopen",

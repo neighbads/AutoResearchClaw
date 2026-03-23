@@ -172,6 +172,7 @@ def check_llm_connectivity(base_url: str) -> CheckResult:
 
     url = _models_url(base_url)
     req = urllib.request.Request(url, method="HEAD")
+    fallback_req = urllib.request.Request(url, method="GET")
 
     try:
         with urllib.request.urlopen(req, timeout=5):
@@ -181,15 +182,27 @@ def check_llm_connectivity(base_url: str) -> CheckResult:
                 detail=f"Reachable: {url}",
             )
     except urllib.error.HTTPError as exc:
-        if exc.code == 405:
+        if exc.code in (401, 403):
+            return CheckResult(
+                name="llm_connectivity",
+                status="pass",
+                detail=f"Reachable: {url} (authentication required)",
+            )
+        if exc.code in (404, 405):
             try:
-                with urllib.request.urlopen(url, timeout=5):
+                with urllib.request.urlopen(fallback_req, timeout=5):
                     return CheckResult(
                         name="llm_connectivity",
                         status="pass",
                         detail=f"Reachable: {url}",
                     )
             except urllib.error.HTTPError as get_exc:
+                if get_exc.code in (401, 403):
+                    return CheckResult(
+                        name="llm_connectivity",
+                        status="pass",
+                        detail=f"Reachable: {url} (authentication required)",
+                    )
                 return CheckResult(
                     name="llm_connectivity",
                     status="fail",
